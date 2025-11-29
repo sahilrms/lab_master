@@ -1,3 +1,5 @@
+# Database base setup: engine, session, and declarative base for ORM
+# This file sets up the async SQLAlchemy engine, session factory, and base class for models.
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker

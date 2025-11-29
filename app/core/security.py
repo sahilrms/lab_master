@@ -1,3 +1,5 @@
+# Handles authentication setup and user management logic
+# This file configures JWT authentication, user manager, and DB dependencies for FastAPI-Users.
 from fastapi_users import BaseUserManager, IntegerIDMixin
 from fastapi_users.authentication import AuthenticationBackend, BearerTransport, JWTStrategy
 from app.core.config import settings

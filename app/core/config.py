@@ -1,3 +1,5 @@
+# Configuration for environment variables and project settings
+# This file defines project-wide settings and loads environment variables for secure configuration.
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 

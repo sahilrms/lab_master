@@ -1,3 +1,5 @@
+# SQLAlchemy model for users and roles in the database
+# This file defines the User table structure and possible roles in the system.
 from sqlalchemy import Boolean, Column, Integer, String, Enum
 from sqlalchemy.sql import func
 from app.db.base import Base

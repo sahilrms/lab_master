@@ -5,6 +5,9 @@ Includes:
 - FastAPI Users authentication (JWT)
 - Auto-creation of DB tables on startup
 - CORS support
+
+This file is the entrypoint for the backend server. It sets up the app, database, authentication, and API routes.
+Each section is commented to help new developers understand the flow.
 """
 
 from contextlib import asynccontextmanager
