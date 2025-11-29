@@ -1,53 +1,39 @@
 """
 Main FastAPI application for Lab Master API.
-Includes:
-- Async PostgreSQL connection (SQLAlchemy)
-- FastAPI Users authentication (JWT)
-- Auto-creation of DB tables on startup
-- CORS support
 
-This file is the entrypoint for the backend server. It sets up the app, database, authentication, and API routes.
-Each section is commented to help new developers understand the flow.
+Features:
+- Async PostgreSQL + SQLAlchemy
+- FastAPI Users (JWT authentication)
+- Auto-create database tables
+- CORS enabled
 """
 
-from contextlib import asynccontextmanager
+# -----------------------------------------------------------
+# Imports
+# -----------------------------------------------------------
 import uuid
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status, Path
 from fastapi.middleware.cors import CORSMiddleware
-
-# FastAPI Users package
 from fastapi_users import FastAPIUsers
+from sqlalchemy import select
 
-# Import your settings, models, schemas, and security modules
 from app.core.config import settings
-from app.models.user import User
-from app.schemas.user import UserCreate, UserRead, UserUpdate
 from app.core.security import get_user_manager, auth_backend
-from app.db.base import Base, engine
-import pydantic
-print("PYDANTIC VERSION:", pydantic.VERSION)
+from app.db.base import Base, engine, get_async_session
+from app.models.user import User, UserRole
+from app.schemas.user import UserCreate, UserRead, UserUpdate
+
 
 # -----------------------------------------------------------
-# Lifespan handler (replaces deprecated on_event("startup"))
+# Lifespan: Auto-create Database Tables
 # -----------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Runs when the application starts.
-    - Creates all tables in the PostgreSQL database (async compatible)
-    
-    Runs again at shutdown.
-    - You can add cleanup operations if needed.
-    """
-    # Create database tables on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-    yield  # Pass control to the application
-
-    # Cleanup (optional)
-    pass
+    yield
 
 
 # -----------------------------------------------------------
@@ -57,68 +43,54 @@ app = FastAPI(
     title="Lab Master API",
     description="Lab Management System",
     version="1.0.0",
-    lifespan=lifespan,  # Attach lifespan handler
+    lifespan=lifespan,
 )
 
 
 # -----------------------------------------------------------
 # CORS Middleware
-# Allows frontend apps (React, Next.js, etc.) to access the API
 # -----------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (change in production)
+    allow_origins=["*"],  # Change to specific domains in production
     allow_credentials=True,
-    allow_methods=["*"],  # All HTTP methods allowed
-    allow_headers=["*"],  # All headers allowed
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
 # -----------------------------------------------------------
 # FastAPI Users Setup
 # -----------------------------------------------------------
-# FastAPIUsers must know:
-# - The User model
-# - The type of the User ID (UUID in your case)
-# - The user manager (handles DB logic)
-# - The authentication backend (JWT auth)
 fastapi_users = FastAPIUsers[User, uuid.UUID](
-    get_user_manager,   # Dependency that returns UserManager instance
-    [auth_backend]      # JWT backend (from your auth module)
+    get_user_manager,
+    [auth_backend],
 )
 
+current_active_user = fastapi_users.current_user(active=True)
+
 
 # -----------------------------------------------------------
-# Authentication Routes
-# These will auto-generate:
-# - /auth/jwt/login
-# - /auth/jwt/logout
-# - /auth/register
-# - /auth/verify
+# Authentication Routes (JWT + Register + Verify)
 # -----------------------------------------------------------
-
-# Login / Logout route (JWT)
 app.include_router(
     fastapi_users.get_auth_router(auth_backend),
     prefix="/auth/jwt",
     tags=["auth"],
 )
 
-# User Registration route
 app.include_router(
     fastapi_users.get_register_router(UserRead, UserCreate),
     prefix="/auth",
     tags=["auth"],
 )
 
-# Email Verification route (optional, but included)
 app.include_router(
     fastapi_users.get_verify_router(UserRead),
     prefix="/auth",
     tags=["auth"],
 )
 
-# CRUD operations for users (admin-level actions)
 app.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/users",
@@ -127,12 +99,78 @@ app.include_router(
 
 
 # -----------------------------------------------------------
-# Default Root Route
-# Simple health-check endpoint
+# User Dependencies
 # -----------------------------------------------------------
-@app.get("/")
+async def get_current_active_user(user=Depends(current_active_user)):
+    return user
+
+
+async def require_admin(user=Depends(get_current_active_user)):
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+# -----------------------------------------------------------
+# User Profile Routes
+# -----------------------------------------------------------
+@app.get("/users/me", response_model=UserRead, tags=["users"])
+async def read_own_profile(user=Depends(get_current_active_user)):
+    return user
+
+
+@app.patch("/users/me", response_model=UserRead, tags=["users"])
+async def update_own_profile(
+    user_update: UserUpdate,
+    user=Depends(get_current_active_user),
+    user_manager=Depends(get_user_manager),
+):
+    updated_user = await user_manager.update(
+        user_update.create_update_dict(),
+        user,
+    )
+    return updated_user
+
+
+# -----------------------------------------------------------
+# Admin Route: List Users
+# -----------------------------------------------------------
+@app.get("/admin/users", response_model=list[UserRead], tags=["admin"])
+async def admin_list_users(
+    skip: int = 0,
+    limit: int = 100,
+    session=Depends(get_async_session),
+    _: User = Depends(require_admin),
+):
+    result = await session.execute(
+        select(User).offset(skip).limit(limit)
+    )
+    return result.scalars().all()
+
+
+# -----------------------------------------------------------
+# Admin Route: Change User Role
+# -----------------------------------------------------------
+@app.patch("/admin/users/{user_id}/role", response_model=UserRead, tags=["admin"])
+async def admin_change_user_role(
+    user_id: int = Path(..., description="Target user ID"),
+    new_role: UserRole = UserRole.PATIENT,
+    user_manager=Depends(get_user_manager),
+    _: User = Depends(require_admin),
+):
+    user = await user_manager.user_db.get(user_id)
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    await user_manager.user_db.update(user, {"role": new_role})
+    user.role = new_role
+    return user
+
+
+# -----------------------------------------------------------
+# Root Endpoint
+# -----------------------------------------------------------
+@app.get("/", tags=["root"])
 async def root():
-    """
-    Root endpoint to verify the API is running.
-    """
     return {"message": "Welcome to Lab Master API"}
