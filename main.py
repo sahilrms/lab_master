@@ -16,14 +16,24 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, status, Path
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_users import FastAPIUsers
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.security import get_user_manager, auth_backend
+from app.core.security import (
+    get_user_manager, 
+    auth_backend, 
+    fastapi_users,
+    current_active_user,
+    require_admin,
+    get_current_receptionist,
+    get_current_technician
+)
 from app.db.base import Base, engine, get_async_session
 from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserRead, UserUpdate
+from app.models.test import Test, Sample
+from app.api.endpoints.tests import router as test_router
+from app.api.endpoints.test_types import router as test_types_router
 
 
 # -----------------------------------------------------------
@@ -60,17 +70,6 @@ app.add_middleware(
 
 
 # -----------------------------------------------------------
-# FastAPI Users Setup
-# -----------------------------------------------------------
-fastapi_users = FastAPIUsers[User, uuid.UUID](
-    get_user_manager,
-    [auth_backend],
-)
-
-current_active_user = fastapi_users.current_user(active=True)
-
-
-# -----------------------------------------------------------
 # Authentication Routes (JWT + Register + Verify)
 # -----------------------------------------------------------
 app.include_router(
@@ -97,32 +96,31 @@ app.include_router(
     tags=["users"],
 )
 
+# Include test management endpoints
+app.include_router(
+    test_router,
+    prefix="/api/v1",
+    tags=["tests"],
+)
 
-# -----------------------------------------------------------
-# User Dependencies
-# -----------------------------------------------------------
-async def get_current_active_user(user=Depends(current_active_user)):
-    return user
-
-
-async def require_admin(user=Depends(get_current_active_user)):
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
-
-
+# Include test types endpoints
+app.include_router(
+    test_types_router,
+    prefix="/api/v1/test-types",
+    tags=["test-types"]
+)
 # -----------------------------------------------------------
 # User Profile Routes
 # -----------------------------------------------------------
 @app.get("/users/me", response_model=UserRead, tags=["users"])
-async def read_own_profile(user=Depends(get_current_active_user)):
+async def read_own_profile(user=Depends(current_active_user)):
     return user
 
 
 @app.patch("/users/me", response_model=UserRead, tags=["users"])
 async def update_own_profile(
     user_update: UserUpdate,
-    user=Depends(get_current_active_user),
+    user=Depends(current_active_user),
     user_manager=Depends(get_user_manager),
 ):
     updated_user = await user_manager.update(
